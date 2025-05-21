@@ -207,10 +207,7 @@ for(prob_type in prob_types) {
       all_metrics[[as.character(s)]] <- indicateurs_df
     }
   }
-  
-  # Clean up
-  stopCluster(cl)
-  
+    
   # Results for a type of probability
   if (length(all_metrics) > 0) {
     final_df <- do.call(rbind, all_metrics)
@@ -232,6 +229,8 @@ for(prob_type in prob_types) {
     cat("No results for probability type:", prob_type$name, "\n")
   }
 }
+                               
+stopCluster(cl)
 
 # Afficher les résultats finaux
 for(prob_name in names(final_results)) {
