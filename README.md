@@ -1,7 +1,19 @@
 # AMLDS-2025
-Scripts for AMLDS 2025 paper <br/>
-All models are trained in amlds_metrics.R
+# Calibration Simulation Study
 
-AUC : AUC.R<br/>
-Brier score : brier_score.R<br/>
-Expected calibration error and Maximum calibration error: mce_ece.R<br/>
+This repository contains R code to simulate and evaluate calibration metrics under various shapes of true probability distributions.
+
+## Structure
+
+- `AMLDS metrics.R`: Main script to run simulations and generate metrics.
+- `AMLDS graphiques.R`: Main script to run simulations and generate graphics.
+- `utils`: Contains helper functions (AUC, Brier score, etc.).
+- `output/`: Contains simulation results (tables, CSV).
+- `plots/`: (Optional) Visualizations of the results.
+
+## Dependencies
+
+Install required packages:
+```r
+install.packages(c("dplyr", "randomForest", "ggplot2", "caret", "faux",
+                   "kernlab", "naivebayes", "moments", "xtable", "nnet", "doParallel"))
