@@ -1,5 +1,5 @@
 # AMLDS-2025
-# Calibration Simulation Study
+# Assessing the ability of supervised classifiers to recover the true underlying probabilities
 
 This repository contains R code to simulate and evaluate calibration metrics under various shapes of true probability distributions.
 
