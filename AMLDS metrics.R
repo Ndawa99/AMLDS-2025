@@ -10,14 +10,14 @@ library(moments)
 library(xtable)
 #install.packages("doParallel")  # Si pas déjà installé
 library(doParallel)
-source('C:/Users/dieyen/OneDrive - LECNAM/Doctorat au Cnam/Thèse/Calibration coding/calibration/Fichiers simulation de base/auc.R')
-source('C:/Users/dieyen/OneDrive - LECNAM/Doctorat au Cnam/Thèse/Calibration coding/calibration/Fichiers simulation de base/brier_score.R')
-source('C:/Users/dieyen/OneDrive - LECNAM/Doctorat au Cnam/Thèse/Calibration coding/calibration/Fichiers simulation de base/mce_ece.R')
+source('./auc.R')
+source('./brier_score.R')
+source('./mce_ece.R')
 n <- 5000
 g=10
 
-#prob_asym
 
+#Beta distribution parameters
 alpha_u = 0.5  
 beta_u = 0.5
 alpha_unif = 1
@@ -27,17 +27,19 @@ beta_asym = 2.4
 alpha_c = 2.4  
 beta_c = 2.4
 seeds <- 123:152
+
 all_metrics <- list()
 results <- list()
 g = 10
 
-#Entraînement du vrai modèle
+#Training
 fitControl <- trainControl(method="none",classProbs = T, savePredictions=T,allowParallel = TRUE)
 fitControl_svm <- trainControl(method = "cv", number=10,classProb=T,savePredictions=T,allowParallel = TRUE)
 fitControl_cv <- trainControl(method = 'cv', number = 10,classProbs = T,savePredictions=T,allowParallel = TRUE)
-#Optimisation des paramètres 
-tuneGrid_svm <- expand.grid(cost = c(0.001, 0.01, 0.1, 1))    #Choix du paramètre à optimiser pour ce modèle
-tuneGrid_rf <- expand.grid(mtry = c(2, 4, 6)) #Choix du paramètre à optimiser pour ce modèle
+
+#Parameters optimisation
+tuneGrid_svm <- expand.grid(cost = c(0.001, 0.01, 0.1, 1))    
+tuneGrid_rf <- expand.grid(mtry = c(2, 4, 6))
 tuneGrid_nb <- expand.grid(usekernel = T,
                            laplace = c(0, 0.5, 1), 
                            adjust = c(0.75, 1, 1.25, 1.5))
@@ -45,7 +47,7 @@ tuneGrid_nn <- expand.grid(size = seq(from = 3, to = 10, by = 1),
                            decay = seq(from = 0.1, to = 0.5, by = 0.1))
 
 
-#Liste des modèles à entraîner
+#Training models
 models <- list(
   lr = list(method = "glm", control = fitControl, tuneGrid=NULL),
   svm = list(method = "svmLinear2", control = fitControl_svm,tuneGrid=tuneGrid_svm),
@@ -54,7 +56,7 @@ models <- list(
   neural_net= list(method = "nnet", control = fitControl_cv, tuneGrid=tuneGrid_nn)
 )
 
-#Apprentissage de tous les modèles que l'on stocke pour garder les résultats 
+#Log_loss 
 log_loss <- function(actual, predicted) {
   eps <- 0.000000001  # Pour éviter log(0)
   predicted <- pmax(pmin(predicted, 1 - eps), eps)
@@ -62,16 +64,18 @@ log_loss <- function(actual, predicted) {
   
   return(loss)
 }
+
 # Liste des types de probabilités à tester
 prob_types <- list(
-  #list(name = "uniforme", alpha = alpha_unif, beta = beta_unif),
-  #list(name = "asymetrique", alpha = alpha_asym, beta = beta_asym),
- # list(name = "cloche", alpha = alpha_c, beta = beta_c),
+  list(name = "uniform", alpha = alpha_unif, beta = beta_unif),
+  list(name = "asymmetric", alpha = alpha_asym, beta = beta_asym),
+  list(name = "bell", alpha = alpha_c, beta = beta_c),
   list(name = "u_shape", alpha = alpha_u, beta = beta_u)
 )
 
-# Initialisation des résultats finaux
+# Initialisation
 final_results <- list()
+
 # Détecte le nombre de cœurs disponibles
 n_cores <- detectCores() - 1
 cl <- makeCluster(n_cores)
@@ -122,7 +126,7 @@ for(prob_type in prob_types) {
     # Initialize results for this seed
     results <- list()
     
-    # Model training loop
+    # Model training 
     for (model in names(models)) {
       cat("  Training model", model, "...")
       
@@ -139,7 +143,7 @@ for(prob_type in prob_types) {
         # Predictions
         p <- predict(fit, test[,1:ncol(x)], type = "prob")[, 2]
         
-        # Calculate metrics
+        # Calculate metrics for loss based decompositions
         mtx <- data.frame(y = test$y, prob = p, id=rownames(test))
         mtx <- mtx[order(mtx$prob), ]
         split_mtx <- split(mtx, rep(1:ceiling(nrow(test)/g), each = nrow(test)/g, length.out = nrow(test)))
@@ -148,7 +152,8 @@ for(prob_type in prob_types) {
         mtx$moy_y <- moy_y_vector
         mtx <- mtx[order(as.numeric(mtx$id)), ]
         test$C <- mtx$moy_y
-        
+
+        #Calculate metrics
         results[[model]] <- list(
           fit = fit,
           kolmogrov_test = ks.test(prob[-train_ind], p)$p.value,
@@ -206,12 +211,12 @@ for(prob_type in prob_types) {
   # Clean up
   stopCluster(cl)
   
-  # Stocker les résultats pour ce type de probabilité
+  # Results for a type of probability
   if (length(all_metrics) > 0) {
     final_df <- do.call(rbind, all_metrics)
     final_results[[prob_type$name]] <- final_df
     
-    # Calculer le nombre de p-values > 0.05 pour chaque modèle
+    # Count number p_values > 0.05
     pvalue_counts <- final_df %>%
       group_by(model) %>%
       summarise(count_pval_gt_005 = sum(p_valueks > 0.05),
@@ -221,7 +226,7 @@ for(prob_type in prob_types) {
     cat("\n=== Results for", prob_type$name, "===\n")
     print(pvalue_counts)
     
-    # Sauvegarder les résultats dans un fichier
+    # Save in a file
     write.csv(pvalue_counts, paste0("pvalue_counts_", prob_type$name, ".csv"), row.names = FALSE)
   } else {
     cat("No results for probability type:", prob_type$name, "\n")
