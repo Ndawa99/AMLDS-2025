@@ -41,7 +41,8 @@ models <- list(
   svm = list(method = "svmLinear2", control = fitControl_svm, tuneGrid = expand.grid(cost = c(0.001, 0.01, 0.1, 1))),
   random_forest = list(method = "rf", control = fitControl_cv, tuneGrid = expand.grid(mtry = c(2, 4, 6))),
   naivebayes = list(method = "naive_bayes", control = fitControl_cv, tuneGrid = expand.grid(usekernel = TRUE, laplace = c(0, 0.5, 1), adjust = c(0.75, 1, 1.25, 1.5))),
-  neural_net = list(method = "nnet", control = fitControl_cv, tuneGrid = expand.grid(size = 3:10, decay = seq(0.1, 0.5, 0.1)))
+  neural_net = list(method = "nnet", control = fitControl_cv, tuneGrid = expand.grid(size = seq(from = 3, to = 10, by = 1),
+                                                                                     decay = seq(from = 0.1, to = 0.5, by = 0.1)))
 )
 
 # Log-loss function
@@ -57,12 +58,15 @@ cl <- makeCluster(n_cores)
 registerDoParallel(cl)
 clusterEvalQ(cl, {
   library(dplyr)
-  library(caret)
   library(randomForest)
+  library(ggplot2)
+  library(gridExtra)
+  library(caret)
+  library(faux)
   library(kernlab)
   library(naivebayes)
-  library(nnet)
-  library(faux)
+  library(moments)
+  library(xtable)
 })
 
 # Global results
@@ -75,8 +79,7 @@ for (dist in distributions) {
 
   for (s in seeds) {
     set.seed(s)
-    cat("  Seed:", s, "\n")
-    
+    cat("\n--- Processing seed", s, "---\n")    
     # Generate data
     prob <- rbeta(n, dist$alpha, dist$beta)
     lin_pred <- qlogis(prob)
@@ -87,13 +90,11 @@ for (dist in distributions) {
     x[,2] <- rnorm_pre(lin_pred, r = -0.3)
     x[,3] <- rnorm_pre(lin_pred, r = -0.2)
     x[,4] <- rnorm_pre(lin_pred, r = 0.4)
-    x[,5:6] <- apply(x[,5:6], 2, function(col) runif(n, min = -3, max = 3))
-    coef <- c(2, -1, -1, 0.5, 3, -4, 1, -0.5, -3)
-    x <- cbind(x, lin_pred - (x %*% coef))
-    
-    data <- as.data.frame(cbind(x, y))
-    colnames(data)[ncol(data)] <- "y"
-    
+    x[,5]=runif(n,min=-3,max=3)
+    x[,6]=runif(n,min=-3,max=3)
+    coef=c(2,-1,-1,0.5,3,-4,1,-0.5,-3)
+    x=cbind(x,lin_pred-(x%*%coef))
+    data=as.data.frame(cbind(x,y))
     # Split
     train_ind <- createDataPartition(data$y, p = 0.5, list = FALSE)
     train <- data[train_ind, ]
@@ -114,34 +115,38 @@ for (dist in distributions) {
         p <- predict(fit, test[, 1:ncol(x)], type = "prob")[,2]
         
         # Create calibration groups
-        mtx <- data.frame(y = test$y, prob = p, id = rownames(test))
+        mtx <- data.frame(y = test$y, prob = p, id=rownames(test))
         mtx <- mtx[order(mtx$prob), ]
-        bins <- split(mtx, rep(1:ceiling(nrow(test)/g), each = nrow(test)/g, length.out = nrow(test)))
-        moy_y <- unlist(lapply(bins, function(b) rep(mean(b$y), nrow(b))))
+        split_mtx <- split(mtx, rep(1:ceiling(nrow(test)/g), each = nrow(test)/g, length.out = nrow(test)))
+        moy_y <- sapply(split_mtx, function(group) mean(group$y))
+        moy_y_vector <- unlist(lapply(split_mtx, function(group) rep(mean(group$y), nrow(group))))
+        mtx$moy_y <- moy_y_vector
         mtx <- mtx[order(as.numeric(mtx$id)), ]
-        test$C <- moy_y
+        test$C <- mtx$moy_y
 
         # Metrics
         results[[model_name]] <- list(
           fit = fit,
-          p_valueks = ks.test(prob[-train_ind], p)$p.value,
+          kolmogrov_test = ks.test(prob[-train_ind], p)$p.value,
           true_mse = mean((p - prob[-train_ind])^2),
-          log_loss_true = log_loss(prob[-train_ind], p),
-          epistemic_ll = log_loss(prob[-train_ind], p) - log_loss(prob[-train_ind], prob[-train_ind]),
-          irreducible_ll = log_loss(test$y, prob[-train_ind]),
-          calibration_ll = log_loss(test$C, p) - log_loss(test$C, test$C),
-          refinement_ll = log_loss(test$y, test$C),
-          log_loss_obs = log_loss(test$y, p),
+          ll_p = log_loss(prob[-train_ind], p),
+          true_ll_epistemic_loss = log_loss(prob[-train_ind], p) - log_loss(prob[-train_ind], prob[-train_ind]),
+          irreducible_loss_ll = log_loss(test$y, prob[-train_ind]),
+          calibration_loss_ll = log_loss(test$C, p) - log_loss(test$C, test$C),
+          refinement_loss_ll = log_loss(test$y, test$C),
+          ll_y = log_loss(test$y, p),
+          cab_large = mean(test$y)/mean(p),
           auc = auc(p, test$y),
-          brier = brier_score(test$y, p),
-          epistemic_bs = brier_score(prob[-train_ind], p) - brier_score(prob[-train_ind], prob[-train_ind]),
-          irreducible_bs = brier_score(test$y, prob[-train_ind]),
-          calibration_bs = brier_score(test$C, p) - brier_score(test$C, test$C),
-          refinement_bs = brier_score(test$y, test$C),
-          ece = ece_mce(test$y, p, g, method = 'C')$ece
+          brier_score = brier_score(test$y, p),
+          bs_epistemic_loss = brier_score(prob[-train_ind], p) - brier_score(prob[-train_ind], prob[-train_ind]),
+          irreducible_loss_bs = brier_score(test$y, prob[-train_ind]),
+          calibration_loss_bs = brier_score(test$C, p) - brier_score(test$C, test$C),
+          refinement_loss_bs = brier_score(test$y, test$C),
+          ece = ece_mce(test$y, p, g, 'C')$ece
         )
+        cat(" success\n")
       }, error = function(e) {
-        message("Error training ", model_name, ": ", e$message)
+        cat(" failed:", e$message, "\n")
       })
     }
     
@@ -152,20 +157,20 @@ for (dist in distributions) {
         data.frame(
           seed = s,
           model = name,
-          p_valueks = res$p_valueks,
+          p_valueks = res$kolmogrov_test,
           True_MSE = res$true_mse,
-          LL_p = res$log_loss_true,
-          Epistemic_Loss_LL = res$epistemic_ll,
-          Irreducible_Loss_LL = res$irreducible_ll,
-          Calibration_Loss_LL = res$calibration_ll,
-          Refinement_Loss_LL = res$refinement_ll,
-          LL_y = res$log_loss_obs,
+          LL_p = res$ll_p,
+          Epistemic_Loss_LL = res$true_ll_epistemic_loss,
+          Irreducible_Loss_LL = res$irreducible_loss_ll,
+          Calibration_Loss_LL = res$calibration_loss_ll,
+          Refinement_Loss_LL = res$refinement_loss_ll,
+          LL_y = res$ll_y,
           ECE = res$ece,
           AUC = res$auc,
-          Brier = res$brier,
-          Epistemic_Loss_BS = res$epistemic_bs,
-          Calibration_Loss_BS = res$calibration_bs,
-          Refinement_Loss_BS = res$refinement_bs
+          Brier = res$brier_score,
+          Epistemic_Loss_BS = res$bs_epistemic_loss,
+          Calibration_Loss_BS = res$calibration_loss_bs,
+          Refinement_Loss_BS = res$refinement_loss_bs
         )
       }))
       all_metrics[[as.character(s)]] <- indicateurs_df
@@ -195,16 +200,29 @@ stopCluster(cl)
 # Export LaTeX tables
 for (prob_name in names(final_results)) {
   cat("\n=== Summary for", prob_name, "===\n")
+  
   summary_metrics <- final_results[[prob_name]] %>%
     group_by(model) %>%
     summarise(across(where(is.numeric), list(mean = mean, sd = sd), .names = "{.col}_{.fn}"))
   
-  formatted <- summary_metrics %>%
-    rename_with(~gsub("_mean", "", .), ends_with("_mean")) %>%
-    mutate(across(-model, ~sprintf("%.3f (%.3f)", ., summary_metrics[[paste0(cur_column(), "_sd")]]))) %>%
-    select(-ends_with("_sd"))
+  # Keep only the columns ending with _mean
+  mean_cols <- names(summary_metrics)[grepl("_mean$", names(summary_metrics))]
+  sd_cols <- gsub("_mean$", "_sd", mean_cols)
+  metric_names <- gsub("_mean$", "", mean_cols)
   
+  # Format as 'mean (standard deviation)"
+  formatted <- data.frame(model = summary_metrics$model)
+  for (i in seq_along(metric_names)) {
+    m_col <- mean_cols[i]
+    s_col <- sd_cols[i]
+    new_col <- metric_names[i]
+    formatted[[new_col]] <- sprintf("%.3f (%.3f)", summary_metrics[[m_col]], summary_metrics[[s_col]])
+  }
+  
+  # Generate the LaTeX table
   latex_table <- xtable(t(formatted))
   print(latex_table)
+  
+  # Save the latex table
   save(list = "latex_table", file = paste0("output/latex_table_", prob_name, ".RData"))
 }
