@@ -1,3 +1,5 @@
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+start_time <- Sys.time()
 # Load required libraries
 library(dplyr)
 library(ggplot2)
@@ -10,6 +12,7 @@ library(naivebayes)
 library(nnet)
 library(moments)
 library(xtable)
+library(doParallel)
 
 # Load custom metric functions
 source("utils/auc.R")
@@ -20,9 +23,8 @@ source("utils/mce_ece.R")
 if (!dir.exists("plots")) dir.create("plots")
 
 # Global settings
-n <- 10000
+n <- 5000
 set.seed(123)
-
 # Define model configurations
 fitControl_none <- trainControl(method = "none", classProbs = TRUE, savePredictions = TRUE)
 fitControl_svm  <- trainControl(method = "cv", number = 10, classProbs = TRUE, savePredictions = TRUE)
@@ -48,7 +50,8 @@ distributions <- list(
   asym     = list(alpha = 0.8, beta = 2.4),
   uniform  = list(alpha = 1,   beta = 1)
 )
-
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
 # Helper function to generate plots
 generate_plots <- function(dist_name, alpha, beta) {
   prob <- rbeta(n, alpha, beta)
@@ -60,17 +63,15 @@ generate_plots <- function(dist_name, alpha, beta) {
   x[,2] <- rnorm_pre(lin_pred, r = -0.3)
   x[,3] <- rnorm_pre(lin_pred, r = -0.2)
   x[,4] <- rnorm_pre(lin_pred, r = 0.4)
-  x[,5:6] <- replicate(2, runif(n, min = -3, max = 3))
-  coef <- c(2, -1, -1, 0.5, 3, -4, 1, -0.5, -3)
-  x <- cbind(x, lin_pred - (x %*% coef))
-
-  data <- as.data.frame(cbind(x, y))
-  colnames(data)[ncol(data)] <- "y"
-
+  x[,5]=runif(n,min=-3,max=3)
+  x[,6]=runif(n,min=-3,max=3)
+  coef=c(2,-1,-1,0.5,3,-4,1,-0.5,-3)
+  x=cbind(x,lin_pred-(x%*%coef))
+  data=as.data.frame(cbind(x,y))
+  # Split
   train_ind <- createDataPartition(data$y, p = 0.5, list = FALSE)
-  test_ind <- setdiff(seq_len(n), train_ind)
   train <- data[train_ind, ]
-  test  <- data[test_ind, ]
+  test  <- data[-train_ind, ]
 
   results <- list()
 
@@ -85,8 +86,8 @@ generate_plots <- function(dist_name, alpha, beta) {
                  preProc = c("center", "scale"))
 
     p <- predict(fit, test[,1:ncol(x)], type = "prob")[,2]
-    error <- prob[test_ind] - p
-    df <- data.frame(prob = prob[test_ind], p = p, error = error)
+    error <- prob[-train_ind] - p
+    df <- data.frame(prob = prob[-train_ind], p = p, error = error)
 
     plot_hist <- ggplot(df, aes(x = p)) +
       geom_histogram(aes(y = after_stat(density)), bins = 100, fill = "blue", color = "black") +
@@ -105,7 +106,7 @@ generate_plots <- function(dist_name, alpha, beta) {
       scale_y_continuous(limits = c(-0.6, 0.6)) +
       labs(
         title = bquote("Scatter plot of" ~ pi ~ "vs" ~ "|" ~ pi - hat(pi) ~ "|" ~ "–" ~ .(model)),
-        x = expression(hat(pi)),
+        x = expression(pi),
         y = paste(dist_name, "-error")
       ) +
       theme_minimal()
@@ -119,8 +120,8 @@ generate_plots <- function(dist_name, alpha, beta) {
 # Generate and collect all plots
 all_plots <- list()
 for (dist in names(distributions)) {
-  p <- distributions[[dist]]
-  all_plots[[dist]] <- generate_plots(dist, p$alpha, p$beta)
+  infos <- distributions[[dist]]
+  all_plots[[dist]] <- generate_plots(dist, infos$alpha, infos$beta)
 }
 
 # Combine and save grid of histograms
@@ -142,3 +143,10 @@ dev.off()
 pdf("plots/all_models_errors.pdf", width = 16, height = 12)
 grid.arrange(grobs = error_plots, nrow = 4, ncol = length(models), top = "Prediction Errors – All Distributions & Models")
 dev.off()
+
+end_time <- Sys.time()
+elapsed <- difftime(end_time, start_time, units = "secs")
+cat("Execution time:", 
+    if (elapsed > 60) paste(round(as.numeric(elapsed)/60, 2), "minutes") else paste(round(elapsed, 2), "seconds"),
+    "\n")
+stopCluster(cl)
