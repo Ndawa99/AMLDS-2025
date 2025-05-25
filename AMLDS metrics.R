@@ -1,3 +1,5 @@
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+start_time <- Sys.time()
 # Load required libraries
 library(dplyr)
 library(caret)
@@ -11,6 +13,7 @@ library(moments)
 library(xtable)
 library(doParallel)
 library(nnet)
+
 
 # Load custom metric functions
 source("utils/auc.R")
@@ -205,12 +208,12 @@ for (prob_name in names(final_results)) {
     group_by(model) %>%
     summarise(across(where(is.numeric), list(mean = mean, sd = sd), .names = "{.col}_{.fn}"))
   
-  # Keep only the columns ending with _mean
+  # Garder uniquement les colonnes se terminant par _mean
   mean_cols <- names(summary_metrics)[grepl("_mean$", names(summary_metrics))]
   sd_cols <- gsub("_mean$", "_sd", mean_cols)
   metric_names <- gsub("_mean$", "", mean_cols)
   
-  # Format as 'mean (standard deviation)"
+  # Formater en "moyenne (écart-type)"
   formatted <- data.frame(model = summary_metrics$model)
   for (i in seq_along(metric_names)) {
     m_col <- mean_cols[i]
@@ -219,10 +222,15 @@ for (prob_name in names(final_results)) {
     formatted[[new_col]] <- sprintf("%.3f (%.3f)", summary_metrics[[m_col]], summary_metrics[[s_col]])
   }
   
-  # Generate the LaTeX table
+  # Générer le tableau LaTeX
   latex_table <- xtable(t(formatted))
   print(latex_table)
   
-  # Save the latex table
+  # Sauvegarde
   save(list = "latex_table", file = paste0("output/latex_table_", prob_name, ".RData"))
 }
+end_time <- Sys.time()
+elapsed <- difftime(end_time, start_time, units = "secs")
+cat("Execution time:", 
+    if (elapsed > 60) paste(round(as.numeric(elapsed)/60, 2), "minutes") else paste(round(elapsed, 2), "seconds"),
+    "\n")
