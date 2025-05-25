@@ -228,6 +228,8 @@ for (prob_name in names(final_results)) {
   
   # Sauvegarde
   save(list = "latex_table", file = paste0("output/latex_table_", prob_name, ".RData"))
+  tex_filename <- paste0("output/latex_table_", prob_name, ".tex")
+  print(latex_table, type = "latex", file = tex_filename, include.rownames = TRUE)
 }
 end_time <- Sys.time()
 elapsed <- difftime(end_time, start_time, units = "secs")
